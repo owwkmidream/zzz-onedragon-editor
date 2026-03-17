@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>体力计划编辑器</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <header class="app-header">
+      <div class="app-title">
+        <div class="app-title__row">
+          <div class="app-title__left">
+            <div class="app-title__name">体力计划编辑器</div>
+            <div class="app-title__desc">手动指向 ZenlessZoneZero-OneDragon 目录后即可使用</div>
+          </div>
+          <div class="app-title__right">
+            <button id="btn-settings" class="button button--icon" title="设置" aria-label="设置"></button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="app">
+      <dialog id="settings-dialog" class="dialog">
+        <div class="dialog__panel">
+          <div class="dialog__header">
+            <div class="dialog__title">设置</div>
+            <button
+              id="btn-settings-close-top"
+              class="button button--icon"
+              title="关闭"
+              aria-label="关闭"
+            ></button>
+          </div>
+          <div class="grid">
+            <label class="field">
+              <div class="field__label">项目根目录</div>
+              <div class="field__row">
+                <input
+                  id="project-root"
+                  class="input"
+                  placeholder="请选择或粘贴 ZenlessZoneZero-OneDragon 目录"
+                />
+                <button id="btn-pick-root" class="button">选择目录</button>
+                <button id="btn-apply-root" class="button button--primary">应用</button>
+              </div>
+              <div class="field__hint" id="root-status"></div>
+            </label>
+
+            <label class="field">
+              <div class="field__label">实例</div>
+              <div class="field__row">
+                <select id="instance-select" class="select"></select>
+                <button id="btn-reload" class="button">重新加载</button>
+                <button id="btn-settings-close" class="button">关闭</button>
+              </div>
+              <div class="field__hint" id="paths-status"></div>
+            </label>
+          </div>
+        </div>
+      </dialog>
+
+      <section class="card">
+        <div class="card__title">配置</div>
+        <div class="cfg">
+          <div class="cfg__row">
+            <label class="toggle toggle--compact" title="开启后全部计划循环到体力用尽">
+              <input id="cfg-loop" type="checkbox" />
+              <span class="toggle__ui" aria-hidden="true"></span>
+              <span class="toggle__text">
+                <span class="toggle__title">循环执行</span>
+              </span>
+            </label>
+
+            <label class="toggle toggle--compact" title="开启后自动跳过体力不足的计划">
+              <input id="cfg-skip" type="checkbox" />
+              <span class="toggle__ui" aria-hidden="true"></span>
+              <span class="toggle__text">
+                <span class="toggle__title">跳过计划</span>
+              </span>
+            </label>
+          </div>
+
+          <div class="cfg__row cfg__row--restore">
+            <div class="cfg-restore">
+              <div class="cfg-restore__title">恢复电量</div>
+            </div>
+            <select id="cfg-restore" class="select select--compact"></select>
+          </div>
+
+          <!-- 保留字段：不展示，但需要保留以便原值写回 -->
+          <input id="cfg-coupon" type="checkbox" hidden />
+        </div>
+
+        <div class="actions actions--tight">
+          <div id="save-status" class="save-status"></div>
+          <div class="actions__spacer"></div>
+          <button id="btn-delete-done" class="button">删除已完成</button>
+          <button id="btn-delete-all" class="button button--danger">删除全部</button>
+        </div>
+
+        <div id="plan-list" class="plan-list"></div>
+        <button id="btn-add" class="button button--primary button--full">新增</button>
+
+        <details id="history-details" class="history" hidden>
+          <summary class="history__summary">
+            <span>history_list（只读）</span>
+            <span id="history-count" class="history__count"></span>
+          </summary>
+          <div id="history-list" class="plan-list plan-list--history"></div>
+        </details>
+
+        <details class="notice">
+          <summary class="notice__title">提示</summary>
+          <ul class="notice__list">
+            <li>自动保存会写入主路径：config/{实例}/one_dragon/charge_plan.yml</li>
+            <li>每次写入前会生成备份：charge_plan.yyyymmdd-HHMMSS.bak</li>
+            <li>主程序可能缓存配置；保存后建议重启主程序以生效</li>
+            <li>level 字段可能被主程序保存时擦除（v0 不提供编辑入口）</li>
+          </ul>
+        </details>
+      </section>
+
+      <section class="card" id="migration-card" hidden>
+        <div class="card__title">迁移</div>
+        <div class="migration">
+          <div id="migration-text" class="migration__text"></div>
+          <button id="btn-migrate-copy" class="button button--primary">复制 legacy 到主路径</button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
