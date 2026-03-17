@@ -4,14 +4,18 @@ import Sortable from "sortablejs";
 import {
   ArrowDownToLine,
   ArrowUpToLine,
+  GripVertical,
   History,
   ListTodo,
+  Pin,
   Settings,
   Trash2,
   X,
   createElement,
   type IconNode,
 } from "lucide";
+
+type TabKind = "charge_plan" | "notorious_hunt";
 
 type InstanceInfo = {
   idx: number;
@@ -20,7 +24,7 @@ type InstanceInfo = {
   active_in_od?: boolean;
 };
 
-type ChargePlanPaths = {
+type ConfigPaths = {
   main_path: string;
   legacy_path: string;
   main_exists: boolean;
@@ -55,7 +59,7 @@ type ChargePlanConfigModel = {
 
 type ReadChargePlanResult = {
   source: string;
-  paths: ChargePlanPaths;
+  paths: ConfigPaths;
   config: ChargePlanConfigModel;
   validation: ValidationResult;
 };
@@ -72,6 +76,27 @@ type CompendiumForChargePlan = {
 
 type TeamInfo = { idx: number; name: string; auto_battle: string };
 
+type NotoriousHuntItem = {
+  mission_type_name: string;
+  level: string;
+  predefined_team_idx: number;
+  auto_battle_config: string;
+  run_times: number;
+  plan_times: number;
+  notorious_hunt_buff_num: number;
+};
+
+type NotoriousHuntConfigModel = {
+  plan_list: NotoriousHuntItem[];
+};
+
+type ReadNotoriousHuntResult = {
+  source: string;
+  paths: ConfigPaths;
+  config: NotoriousHuntConfigModel;
+  validation: ValidationResult;
+};
+
 const RESTORE_CHARGE_ALLOWED = [
   "不使用",
   "使用储蓄电量",
@@ -80,6 +105,24 @@ const RESTORE_CHARGE_ALLOWED = [
 ];
 
 const CARD_NUM_ALLOWED = ["默认数量", "1", "2", "3", "4", "5"];
+
+const HUNT_LEVEL_ALLOWED = [
+  "默认等级",
+  "等级Lv.65",
+  "等级Lv.60",
+  "等级Lv.50",
+  "等级Lv.40",
+  "等级Lv.30",
+];
+
+const HUNT_BUFF_ALLOWED = [
+  { label: "第一个BUFF", value: 1 },
+  { label: "第二个BUFF", value: 2 },
+  { label: "第三个BUFF", value: 3 },
+];
+
+const HUNT_CATEGORY_NAME = "恶名狩猎";
+const HUNT_FILTER_MISSION_TYPE = "代理人方案培养";
 
 const $ = <T extends HTMLElement>(sel: string) =>
   document.querySelector(sel) as T;
@@ -100,6 +143,13 @@ const storage = {
   setLastInstance(value: number) {
     localStorage.setItem("instance_idx", String(value));
   },
+  getActiveTab(): TabKind {
+    const raw = localStorage.getItem("active_tab");
+    return raw === "notorious_hunt" ? "notorious_hunt" : "charge_plan";
+  },
+  setActiveTab(value: TabKind) {
+    localStorage.setItem("active_tab", value);
+  },
 };
 
 const state = {
@@ -109,15 +159,28 @@ const state = {
   teams: [] as TeamInfo[],
   autoBattles: [] as string[],
   currentInstanceIdx: 1,
-  paths: null as ChargePlanPaths | null,
-  source: "none",
-  config: null as ChargePlanConfigModel | null,
+  activeTab: storage.getActiveTab(),
+  chargePlan: {
+    loadedInstanceIdx: null as number | null,
+    paths: null as ConfigPaths | null,
+    source: "none",
+    config: null as ChargePlanConfigModel | null,
+    validation: null as ValidationResult | null,
+  },
+  hunt: {
+    loadedInstanceIdx: null as number | null,
+    paths: null as ConfigPaths | null,
+    source: "none",
+    config: null as NotoriousHuntConfigModel | null,
+    validation: null as ValidationResult | null,
+  },
 };
 
 let planSortable: Sortable | null = null;
+let huntSortable: Sortable | null = null;
 let saveTimer: number | null = null;
-let saveQueued = false;
 let saving = false;
+const pendingSaves = new Set<TabKind>();
 
 function iconSvg(iconNode: IconNode, size: number) {
   const el = createElement(iconNode, {
@@ -165,6 +228,24 @@ function instanceLabel(i: InstanceInfo) {
   return `${String(i.idx).padStart(2, "0")} - ${i.name}${flagText}`;
 }
 
+function tabLabel(kind: TabKind) {
+  return kind === "charge_plan" ? "体力计划" : "恶名狩猎";
+}
+
+function resetLoadedConfigs() {
+  state.chargePlan.loadedInstanceIdx = null;
+  state.chargePlan.paths = null;
+  state.chargePlan.source = "none";
+  state.chargePlan.config = null;
+  state.chargePlan.validation = null;
+
+  state.hunt.loadedInstanceIdx = null;
+  state.hunt.paths = null;
+  state.hunt.source = "none";
+  state.hunt.config = null;
+  state.hunt.validation = null;
+}
+
 async function applyProjectRoot(root: string) {
   state.projectRoot = root.trim();
   ($<HTMLInputElement>("#project-root")).value = state.projectRoot;
@@ -177,9 +258,12 @@ async function applyProjectRoot(root: string) {
   storage.setProjectRoot(state.projectRoot);
   setText("root-status", `已应用：${state.projectRoot}`);
 
+  resetLoadedConfigs();
   await loadInstances();
   await loadOptions();
-  await loadChargePlan();
+  renderTabs();
+  await loadActiveTab(true);
+  renderActiveTabUI();
 }
 
 async function loadInstances() {
@@ -223,29 +307,61 @@ async function loadOptions() {
   }
 }
 
-async function loadChargePlan() {
+async function loadChargePlan(force = false) {
+  if (
+    !force &&
+    state.chargePlan.loadedInstanceIdx === state.currentInstanceIdx &&
+    state.chargePlan.config
+  ) {
+    return;
+  }
+
   const res = await invoke<ReadChargePlanResult>("read_charge_plan", {
     instanceIdx: state.currentInstanceIdx,
   });
-  state.paths = res.paths;
-  state.source = res.source;
-  state.config = res.config;
+  state.chargePlan.loadedInstanceIdx = state.currentInstanceIdx;
+  state.chargePlan.paths = res.paths;
+  state.chargePlan.source = res.source;
+  state.chargePlan.config = res.config;
+  state.chargePlan.validation = res.validation;
+}
 
-  renderPathsStatus();
-  renderMigrationCard();
-  renderConfigHeader();
-  renderTable();
+async function loadHunt(force = false) {
+  if (
+    !force &&
+    state.hunt.loadedInstanceIdx === state.currentInstanceIdx &&
+    state.hunt.config
+  ) {
+    return;
+  }
 
-  setSaveStatus(`自动保存：就绪（${fmtClock()}）`, "ok");
+  const res = await invoke<ReadNotoriousHuntResult>("read_notorious_hunt", {
+    instanceIdx: state.currentInstanceIdx,
+  });
+  state.hunt.loadedInstanceIdx = state.currentInstanceIdx;
+  state.hunt.paths = res.paths;
+  state.hunt.source = res.source;
+  state.hunt.config = res.config;
+  state.hunt.validation = res.validation;
+}
+
+async function loadActiveTab(force = false) {
+  if (!state.projectRoot) return;
+  if (state.activeTab === "charge_plan") await loadChargePlan(force);
+  else await loadHunt(force);
 }
 
 function renderPathsStatus() {
-  if (!state.paths) return;
-  const p = state.paths;
+  const tabState = state.activeTab === "charge_plan" ? state.chargePlan : state.hunt;
+  if (!tabState.paths) {
+    setText("paths-status", "");
+    return;
+  }
+  const p = tabState.paths;
   const text = [
     `${fmtStatusDot(p.main_exists)} main: ${p.main_path}`,
     `${fmtStatusDot(p.legacy_exists)} legacy: ${p.legacy_path}`,
-    `source: ${state.source}`,
+    `source: ${tabState.source}`,
   ].join(" | ");
   setText("paths-status", text);
 }
@@ -253,63 +369,110 @@ function renderPathsStatus() {
 function renderMigrationCard() {
   const card = document.getElementById("migration-card") as HTMLElement | null;
   const text = document.getElementById("migration-text") as HTMLElement | null;
-  if (!card || !text || !state.paths) return;
-  if (state.source !== "legacy") {
+  const tabState = state.activeTab === "charge_plan" ? state.chargePlan : state.hunt;
+  if (!card || !text) return;
+  if (!tabState.paths) {
+    card.hidden = true;
+    return;
+  }
+  if (tabState.source !== "legacy") {
     card.hidden = true;
     return;
   }
   card.hidden = false;
-  text.textContent = `当前读取自 legacy：${state.paths.legacy_path}。建议迁移到主路径：${state.paths.main_path}。`;
+  text.textContent = `当前读取自 legacy：${tabState.paths.legacy_path}。建议迁移到主路径：${tabState.paths.main_path}。`;
 }
 
-function renderConfigHeader() {
-  if (!state.config) return;
-  ($<HTMLInputElement>("#cfg-loop")).checked = state.config.loop_enabled;
-  ($<HTMLInputElement>("#cfg-skip")).checked = state.config.skip_plan;
-  ($<HTMLInputElement>("#cfg-coupon")).checked = state.config.use_coupon;
-  ($<HTMLSelectElement>("#cfg-restore")).value = state.config.restore_charge;
+function renderChargePlanHeader() {
+  if (!state.chargePlan.config) return;
+  ($<HTMLInputElement>("#cfg-loop")).checked = state.chargePlan.config.loop_enabled;
+  ($<HTMLInputElement>("#cfg-skip")).checked = state.chargePlan.config.skip_plan;
+  ($<HTMLInputElement>("#cfg-coupon")).checked = state.chargePlan.config.use_coupon;
+  ($<HTMLSelectElement>("#cfg-restore")).value = state.chargePlan.config.restore_charge;
 }
 
-function syncConfigFromHeader() {
-  if (!state.config) return;
-  state.config.loop_enabled = ($<HTMLInputElement>("#cfg-loop")).checked;
-  state.config.skip_plan = ($<HTMLInputElement>("#cfg-skip")).checked;
-  state.config.use_coupon = ($<HTMLInputElement>("#cfg-coupon")).checked;
-  state.config.restore_charge = ($<HTMLSelectElement>("#cfg-restore")).value;
+function syncChargePlanFromHeader() {
+  if (!state.chargePlan.config) return;
+  state.chargePlan.config.loop_enabled = ($<HTMLInputElement>("#cfg-loop")).checked;
+  state.chargePlan.config.skip_plan = ($<HTMLInputElement>("#cfg-skip")).checked;
+  state.chargePlan.config.use_coupon = ($<HTMLInputElement>("#cfg-coupon")).checked;
+  state.chargePlan.config.restore_charge = ($<HTMLSelectElement>("#cfg-restore")).value;
 }
 
-function scheduleAutoSave() {
-  if (!state.config) return;
-  saveQueued = true;
+function scheduleAutoSave(kind: TabKind = state.activeTab) {
+  pendingSaves.add(kind);
   if (saveTimer) window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => void autoSave(), 600);
   setSaveStatus(`自动保存：待保存（${fmtClock()}）`);
 }
 
 async function autoSave() {
-  if (!state.config || !saveQueued) return;
+  if (pendingSaves.size === 0) return;
   if (saving) return;
 
   saving = true;
-  saveQueued = false;
   setSaveStatus("自动保存：保存中…", "saving");
-  syncConfigFromHeader();
 
-  try {
-    const res = await invoke<SaveResult>("save_charge_plan", {
-      instanceIdx: state.currentInstanceIdx,
-      config: state.config,
-      options: { update_history_list: true },
-    });
+  const toSave = Array.from(pendingSaves);
+  pendingSaves.clear();
+
+  const errors: Array<{ kind: TabKind; message: string }> = [];
+  for (const kind of toSave) {
+    try {
+      if (kind === "charge_plan") await saveChargePlan();
+      else await saveHunt();
+    } catch (e) {
+      errors.push({ kind, message: String(e) });
+    }
+  }
+
+  if (errors.length) {
+    const first = errors[0];
+    setSaveStatus(
+      `自动保存失败（${tabLabel(first.kind)}）：${first.message}`,
+      "err",
+    );
+  } else {
     setSaveStatus(`自动保存：已保存（${fmtClock()}）`, "ok");
+  }
 
-    // 避免频繁 re-load 打断用户操作：这里只做提示，不强制刷新配置。
-    void res;
-  } catch (e) {
-    setSaveStatus(`自动保存失败：${String(e)}`, "err");
-  } finally {
-    saving = false;
-    if (saveQueued) scheduleAutoSave();
+  saving = false;
+  if (pendingSaves.size) scheduleAutoSave();
+}
+
+async function saveChargePlan() {
+  if (!state.chargePlan.config) return;
+  syncChargePlanFromHeader();
+  const res = await invoke<SaveResult>("save_charge_plan", {
+    instanceIdx: state.currentInstanceIdx,
+    config: state.chargePlan.config,
+    options: { update_history_list: true },
+  });
+  void res;
+
+  if (state.chargePlan.paths) state.chargePlan.paths.main_exists = true;
+  state.chargePlan.source = "main";
+
+  if (state.activeTab === "charge_plan") {
+    renderPathsStatus();
+    renderMigrationCard();
+  }
+}
+
+async function saveHunt() {
+  if (!state.hunt.config) return;
+  const res = await invoke<SaveResult>("save_notorious_hunt", {
+    instanceIdx: state.currentInstanceIdx,
+    config: state.hunt.config,
+  });
+  void res;
+
+  if (state.hunt.paths) state.hunt.paths.main_exists = true;
+  state.hunt.source = "main";
+
+  if (state.activeTab === "notorious_hunt") {
+    renderPathsStatus();
+    renderMigrationCard();
   }
 }
 
@@ -402,6 +565,74 @@ function createNumberInput(
   return input;
 }
 
+function syncFormValuesForClone(item: HTMLElement, clone: HTMLElement) {
+  // SortableJS 在 fallback 拖拽时会 clone DOM；部分浏览器对 <select>/<input> 的当前值不会被 cloneNode 保留，
+  // 导致拖拽预览（clone/ghost）显示为“第一个选项/0/空”等默认值。这里把表单值从原节点拷贝到 clone。
+  const itemSelects = item.querySelectorAll<HTMLSelectElement>("select");
+  const cloneSelects = clone.querySelectorAll<HTMLSelectElement>("select");
+  itemSelects.forEach((sel, idx) => {
+    const target = cloneSelects[idx];
+    if (!target) return;
+    const value = sel.value;
+    target.value = value;
+    target.selectedIndex = sel.selectedIndex;
+
+    // 确保 option.selected 与 selected 属性同步，避免某些环境下 UI 仍显示默认项。
+    Array.from(target.options).forEach((opt) => {
+      const selected = opt.value === value;
+      opt.selected = selected;
+      if (selected) opt.setAttribute("selected", "selected");
+      else opt.removeAttribute("selected");
+    });
+  });
+
+  const itemInputs = item.querySelectorAll<HTMLInputElement>("input");
+  const cloneInputs = clone.querySelectorAll<HTMLInputElement>("input");
+  itemInputs.forEach((input, idx) => {
+    const target = cloneInputs[idx];
+    if (!target) return;
+    if (input.type === "checkbox" || input.type === "radio") {
+      target.checked = input.checked;
+      if (input.checked) target.setAttribute("checked", "checked");
+      else target.removeAttribute("checked");
+    } else {
+      target.value = input.value;
+      target.setAttribute("value", input.value);
+    }
+  });
+
+  const itemTextareas = item.querySelectorAll<HTMLTextAreaElement>("textarea");
+  const cloneTextareas = clone.querySelectorAll<HTMLTextAreaElement>("textarea");
+  itemTextareas.forEach((ta, idx) => {
+    const target = cloneTextareas[idx];
+    if (!target) return;
+    target.value = ta.value;
+    target.textContent = ta.value;
+  });
+}
+
+function syncSortableDragPreview(evt: { item: HTMLElement; clone: HTMLElement }) {
+  const item = evt.item;
+
+  const apply = (target: HTMLElement | null | undefined) => {
+    if (!target) return;
+    syncFormValuesForClone(item, target);
+  };
+
+  apply(evt.clone);
+  apply(Sortable.dragged);
+  apply(Sortable.clone);
+  apply(Sortable.ghost);
+
+  // 部分场景 clone/ghost 会在同一帧后才插入/更新，补一拍同步更稳。
+  requestAnimationFrame(() => {
+    apply(evt.clone);
+    apply(Sortable.dragged);
+    apply(Sortable.clone);
+    apply(Sortable.ghost);
+  });
+}
+
 function renderTable() {
   // 兼容旧调用点：统一走新的卡片式列表渲染
   renderPlanList();
@@ -410,7 +641,8 @@ function renderTable() {
 
 function renderPlanList() {
   const listEl = document.getElementById("plan-list") as HTMLElement | null;
-  if (!listEl || !state.config) return;
+  const config = state.chargePlan.config;
+  if (!listEl || !config) return;
   listEl.innerHTML = "";
 
   const field = (label: string, control: HTMLElement, extraClass = "") => {
@@ -442,8 +674,8 @@ function renderPlanList() {
     return wrap;
   };
 
-  for (let index = 0; index < state.config.plan_list.length; index++) {
-    const item = state.config.plan_list[index];
+  for (let index = 0; index < config.plan_list.length; index++) {
+    const item = config.plan_list[index];
     ensureValidSelection(item);
 
     const card = document.createElement("div");
@@ -610,7 +842,7 @@ function renderPlanList() {
 
     ops.appendChild(
       mkIcon(ArrowUpToLine, "置顶", false, () => {
-        const list = state.config!.plan_list;
+        const list = state.chargePlan.config!.plan_list;
         if (index <= 0) return;
         const [moved] = list.splice(index, 1);
         list.unshift(moved);
@@ -620,7 +852,7 @@ function renderPlanList() {
     );
     ops.appendChild(
       mkIcon(ArrowDownToLine, "置底", false, () => {
-        const list = state.config!.plan_list;
+        const list = state.chargePlan.config!.plan_list;
         if (index >= list.length - 1) return;
         const [moved] = list.splice(index, 1);
         list.push(moved);
@@ -630,7 +862,7 @@ function renderPlanList() {
     );
     ops.appendChild(
       mkIcon(Trash2, "删除", true, () => {
-        state.config!.plan_list.splice(index, 1);
+        state.chargePlan.config!.plan_list.splice(index, 1);
         scheduleAutoSave();
         renderPlanList();
       }),
@@ -652,18 +884,26 @@ function renderPlanList() {
     draggable: ".plan-card",
     filter: "select, option, input, textarea, button, a, summary",
     preventOnFilter: false,
+    onStart: (evt) => {
+      syncSortableDragPreview(evt);
+    },
+    onClone: (evt) => {
+      syncSortableDragPreview(evt);
+    },
     onEnd: (evt) => {
       void evt;
-      if (!state.config) return;
+      if (!state.chargePlan.config) return;
 
       // 用 DOM 顺序重建列表，避免 oldIndex/newIndex 在 fallback 模式下偶发不准
       const ids = Array.from(
         listEl.querySelectorAll<HTMLElement>(".plan-card"),
       ).map((el) => el.dataset.planId ?? "");
-      const byId = new Map(state.config.plan_list.map((x) => [x.plan_id, x] as const));
+      const byId = new Map(
+        state.chargePlan.config.plan_list.map((x) => [x.plan_id, x] as const),
+      );
       const reordered = ids.map((id) => byId.get(id)).filter(Boolean) as ChargePlanItem[];
-      if (reordered.length === state.config.plan_list.length) {
-        state.config.plan_list = reordered;
+      if (reordered.length === state.chargePlan.config.plan_list.length) {
+        state.chargePlan.config.plan_list = reordered;
         scheduleAutoSave();
       }
 
@@ -677,9 +917,9 @@ function renderHistoryList() {
   const details = document.getElementById("history-details") as HTMLDetailsElement | null;
   const countEl = document.getElementById("history-count") as HTMLElement | null;
   const listEl = document.getElementById("history-list") as HTMLElement | null;
-  if (!details || !countEl || !listEl || !state.config) return;
+  if (!details || !countEl || !listEl || !state.chargePlan.config) return;
 
-  const items = state.config.history_list ?? [];
+  const items = state.chargePlan.config.history_list ?? [];
   if (!items.length) {
     details.hidden = true;
     return;
@@ -771,27 +1011,312 @@ function newPlanItem(): ChargePlanItem {
   };
 }
 
-async function migrateCopy() {
-  const res = await invoke<{ written_path: string }>("migrate_legacy_to_main", {
-    instanceIdx: state.currentInstanceIdx,
-    mode: "copy",
-  });
-  setText("root-status", `已迁移到：${res.written_path}`);
-  await loadChargePlan();
+async function migrateCopyActiveTab() {
+  if (state.activeTab === "charge_plan") {
+    const res = await invoke<{ written_path: string }>("migrate_legacy_to_main", {
+      instanceIdx: state.currentInstanceIdx,
+      mode: "copy",
+    });
+    setText("root-status", `已迁移到：${res.written_path}`);
+    await loadChargePlan(true);
+  } else {
+    const res = await invoke<{ written_path: string }>(
+      "migrate_notorious_hunt_legacy_to_main",
+      {
+        instanceIdx: state.currentInstanceIdx,
+        mode: "copy",
+      },
+    );
+    setText("root-status", `已迁移到：${res.written_path}`);
+    await loadHunt(true);
+  }
+  renderActiveTabUI();
 }
 
 function deleteCompleted() {
-  if (!state.config) return;
-  state.config.plan_list = state.config.plan_list.filter((x) => !isCompleted(x));
+  if (!state.chargePlan.config) return;
+  state.chargePlan.config.plan_list = state.chargePlan.config.plan_list.filter(
+    (x) => !isCompleted(x),
+  );
   renderTable();
-  scheduleAutoSave();
+  scheduleAutoSave("charge_plan");
 }
 
 function deleteAll() {
-  if (!state.config) return;
-  state.config.plan_list = [];
+  if (!state.chargePlan.config) return;
+  state.chargePlan.config.plan_list = [];
   renderTable();
-  scheduleAutoSave();
+  scheduleAutoSave("charge_plan");
+}
+
+function renderTabs() {
+  const isCharge = state.activeTab === "charge_plan";
+
+  const tabCharge = document.getElementById("tab-charge-plan");
+  const tabHunt = document.getElementById("tab-hunt");
+  tabCharge?.classList.toggle("tab--active", isCharge);
+  tabHunt?.classList.toggle("tab--active", !isCharge);
+  tabCharge?.setAttribute("aria-selected", isCharge ? "true" : "false");
+  tabHunt?.setAttribute("aria-selected", !isCharge ? "true" : "false");
+
+  const panelCharge = document.getElementById("panel-charge-plan") as HTMLElement | null;
+  const panelHunt = document.getElementById("panel-hunt") as HTMLElement | null;
+  panelCharge?.classList.toggle("panel--active", isCharge);
+  panelHunt?.classList.toggle("panel--active", !isCharge);
+  if (panelCharge) panelCharge.hidden = !isCharge;
+  if (panelHunt) panelHunt.hidden = isCharge;
+
+  const actions = document.getElementById("charge-plan-actions") as HTMLElement | null;
+  if (actions) actions.hidden = !isCharge;
+}
+
+async function switchTab(kind: TabKind) {
+  if (state.activeTab === kind) return;
+  state.activeTab = kind;
+  storage.setActiveTab(kind);
+  renderTabs();
+
+  if (!state.projectRoot) return;
+
+  setSaveStatus(`自动保存：加载中（${fmtClock()}）`, "saving");
+  try {
+    await loadActiveTab(false);
+    renderActiveTabUI();
+    setSaveStatus(`自动保存：就绪（${fmtClock()}）`, "ok");
+  } catch (e) {
+    setSaveStatus(`加载失败：${String(e)}`, "err");
+  }
+}
+
+function renderActiveTabUI() {
+  renderTabs();
+  renderPathsStatus();
+  renderMigrationCard();
+
+  if (state.activeTab === "charge_plan") {
+    renderChargePlanHeader();
+    renderTable();
+    return;
+  }
+
+  renderHuntList();
+}
+
+function getHuntBossOptions(): { value: string; label: string }[] {
+  const types = getMissionTypes(HUNT_CATEGORY_NAME);
+  const filtered = types.filter((t) => t.value !== HUNT_FILTER_MISSION_TYPE);
+  return filtered.map((t) => ({ value: t.value, label: t.label }));
+}
+
+function getTeamLabel(idx: number) {
+  const found = state.teams.find((t) => t.idx === idx);
+  return found ? `${idx}（${found.name}）` : `${idx}（预备编队）`;
+}
+
+function renderHuntList() {
+  const listEl = document.getElementById("hunt-list") as HTMLElement | null;
+  const config = state.hunt.config;
+  if (!listEl || !config) return;
+  listEl.innerHTML = "";
+
+  const field = (label: string, control: HTMLElement, extraClass = "") => {
+    const wrap = document.createElement("label");
+    wrap.className = `plan-field ${extraClass}`.trim();
+    const l = document.createElement("span");
+    l.className = "plan-field__label";
+    l.textContent = label;
+    wrap.appendChild(l);
+    wrap.appendChild(control);
+    return wrap;
+  };
+
+  const fieldTooltip = (label: string, control: HTMLElement, extraClass = "") => {
+    if (
+      control instanceof HTMLInputElement ||
+      control instanceof HTMLSelectElement ||
+      control instanceof HTMLTextAreaElement
+    ) {
+      control.setAttribute("title", label);
+      control.setAttribute("aria-label", label);
+    } else {
+      control.setAttribute("title", label);
+      control.setAttribute("aria-label", label);
+    }
+
+    const wrap = field(label, control, `plan-field--tooltip ${extraClass}`.trim());
+    wrap.setAttribute("title", label);
+    return wrap;
+  };
+
+  const bossOptions = getHuntBossOptions();
+  const levelOptions = HUNT_LEVEL_ALLOWED.map((v) => ({ value: v, label: v }));
+  const autoOptions = (state.autoBattles.length
+    ? state.autoBattles
+    : ["全配队通用"]
+  ).map((ab) => ({ value: ab, label: ab }));
+
+  for (let index = 0; index < config.plan_list.length; index++) {
+    const item = config.plan_list[index];
+
+    const card = document.createElement("div");
+    card.className = "plan-card";
+    card.dataset.boss = item.mission_type_name;
+    card.classList.toggle("plan-card--done", item.run_times >= item.plan_times);
+
+    const icon = document.createElement("div");
+    icon.className = "plan-card__icon";
+    icon.title = "拖拽排序";
+    icon.appendChild(iconSvg(GripVertical, 18));
+    card.appendChild(icon);
+
+    const content = document.createElement("div");
+    content.className = "plan-card__content";
+    card.appendChild(content);
+
+    const rowTop = document.createElement("div");
+    rowTop.className = "plan-row plan-row--top";
+    content.appendChild(rowTop);
+
+    const bossSel = createSelect(
+      bossOptions,
+      item.mission_type_name,
+      () => void 0,
+      true,
+    );
+    rowTop.appendChild(fieldTooltip("BOSS", bossSel, "plan-field--boss"));
+
+    const levelSel = createSelect(levelOptions, item.level, (v) => {
+      item.level = v;
+      scheduleAutoSave("notorious_hunt");
+    });
+    rowTop.appendChild(fieldTooltip("等级", levelSel, "plan-field--level"));
+
+    const teamOptions = [
+      { value: "-1", label: "-1（游戏内配队）" },
+      ...Array.from({ length: 10 }, (_, i) => ({
+        value: String(i),
+        label: getTeamLabel(i),
+      })),
+    ];
+    const teamSel = createSelect(
+      teamOptions,
+      String(item.predefined_team_idx),
+      (v) => {
+        item.predefined_team_idx = Number(v);
+        scheduleAutoSave("notorious_hunt");
+        renderHuntList();
+      },
+    );
+    rowTop.appendChild(fieldTooltip("配队", teamSel, "plan-field--team"));
+
+    if (item.predefined_team_idx === -1) {
+      const autoSel = createSelect(autoOptions, item.auto_battle_config, (v) => {
+        item.auto_battle_config = v;
+        scheduleAutoSave("notorious_hunt");
+      });
+      rowTop.appendChild(fieldTooltip("战斗配置", autoSel, "plan-field--auto"));
+    }
+
+    const buffOptions = HUNT_BUFF_ALLOWED.map((b) => ({
+      value: String(b.value),
+      label: b.label,
+    }));
+    const buffSel = createSelect(
+      buffOptions,
+      String(item.notorious_hunt_buff_num),
+      (v) => {
+        item.notorious_hunt_buff_num = Number(v);
+        scheduleAutoSave("notorious_hunt");
+      },
+    );
+    rowTop.appendChild(fieldTooltip("BUFF", buffSel, "plan-field--buff"));
+
+    const rowBottom = document.createElement("div");
+    rowBottom.className = "plan-row plan-row--bottom";
+    content.appendChild(rowBottom);
+
+    const runInput = createNumberInput(item.run_times, (v) => {
+      item.run_times = v;
+      card.classList.toggle("plan-card--done", item.run_times >= item.plan_times);
+      scheduleAutoSave("notorious_hunt");
+    });
+    rowBottom.appendChild(field("已运行次数", runInput, "plan-field--run"));
+
+    const planInput = createNumberInput(item.plan_times, (v) => {
+      item.plan_times = v;
+      card.classList.toggle("plan-card--done", item.run_times >= item.plan_times);
+      scheduleAutoSave("notorious_hunt");
+    });
+    rowBottom.appendChild(field("计划次数", planInput, "plan-field--plan"));
+
+    const ops = document.createElement("div");
+    ops.className = "plan-ops";
+    rowBottom.appendChild(ops);
+
+    const pinBtn = document.createElement("button");
+    pinBtn.type = "button";
+    pinBtn.className = "icon-btn";
+    pinBtn.title = "置顶";
+    pinBtn.setAttribute("aria-label", "置顶");
+    pinBtn.appendChild(iconSvg(Pin, 16));
+    pinBtn.addEventListener("click", () => {
+      const list = state.hunt.config!.plan_list;
+      if (index <= 0) return;
+      const [moved] = list.splice(index, 1);
+      list.unshift(moved);
+      scheduleAutoSave("notorious_hunt");
+      renderHuntList();
+    });
+    ops.appendChild(pinBtn);
+
+    listEl.appendChild(card);
+  }
+
+  if (huntSortable) {
+    huntSortable.destroy();
+    huntSortable = null;
+  }
+
+  huntSortable = new Sortable(listEl, {
+    animation: 150,
+    forceFallback: true,
+    ghostClass: "plan-card--ghost",
+    chosenClass: "plan-card--chosen",
+    draggable: ".plan-card",
+    handle: ".plan-card__icon",
+    filter: "select, option, input, textarea, button, a, summary",
+    preventOnFilter: false,
+    onStart: (evt) => {
+      syncSortableDragPreview(evt);
+    },
+    onClone: (evt) => {
+      syncSortableDragPreview(evt);
+    },
+    onEnd: (evt) => {
+      void evt;
+      const cfg = state.hunt.config;
+      if (!cfg) return;
+
+      const ids = Array.from(
+        listEl.querySelectorAll<HTMLElement>(".plan-card"),
+      ).map((el) => el.dataset.boss ?? "");
+      const byId = new Map(
+        cfg.plan_list.map((x) => [x.mission_type_name, x] as const),
+      );
+
+      const reordered: NotoriousHuntItem[] = [];
+      for (const id of ids) {
+        const it = byId.get(id);
+        if (it) reordered.push(it);
+      }
+      if (reordered.length === cfg.plan_list.length) {
+        cfg.plan_list = reordered;
+        scheduleAutoSave("notorious_hunt");
+      }
+
+      setTimeout(() => renderHuntList(), 0);
+    },
+  });
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
@@ -825,6 +1350,14 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   ($<HTMLInputElement>("#project-root")).value = storage.getProjectRoot();
 
+  $<HTMLButtonElement>("#tab-charge-plan").addEventListener("click", () => {
+    void switchTab("charge_plan");
+  });
+  $<HTMLButtonElement>("#tab-hunt").addEventListener("click", () => {
+    void switchTab("notorious_hunt");
+  });
+  renderTabs();
+
   $<HTMLButtonElement>("#btn-pick-root").addEventListener("click", async () => {
     try {
       const result = await open({
@@ -857,8 +1390,10 @@ window.addEventListener("DOMContentLoaded", async () => {
       state.currentInstanceIdx = v;
       storage.setLastInstance(v);
       try {
+        resetLoadedConfigs();
         await loadOptions();
-        await loadChargePlan();
+        await loadActiveTab(true);
+        renderActiveTabUI();
       } catch (err) {
         setText("root-status", String(err));
       }
@@ -866,30 +1401,32 @@ window.addEventListener("DOMContentLoaded", async () => {
   );
 
   $<HTMLButtonElement>("#btn-reload").addEventListener("click", async () => {
+    resetLoadedConfigs();
     await loadOptions();
-    await loadChargePlan();
+    await loadActiveTab(true);
+    renderActiveTabUI();
   });
 
   // 配置区：自动保存（无手动保存/校验按钮）
   $<HTMLInputElement>("#cfg-loop").addEventListener("change", () => {
-    syncConfigFromHeader();
-    scheduleAutoSave();
+    syncChargePlanFromHeader();
+    scheduleAutoSave("charge_plan");
   });
   $<HTMLInputElement>("#cfg-skip").addEventListener("change", () => {
-    syncConfigFromHeader();
-    scheduleAutoSave();
+    syncChargePlanFromHeader();
+    scheduleAutoSave("charge_plan");
   });
   $<HTMLSelectElement>("#cfg-restore").addEventListener("change", () => {
-    syncConfigFromHeader();
-    scheduleAutoSave();
+    syncChargePlanFromHeader();
+    scheduleAutoSave("charge_plan");
   });
 
   $<HTMLButtonElement>("#btn-add").addEventListener("click", () => {
-    if (!state.config) return;
+    if (!state.chargePlan.config) return;
     const item = newPlanItem();
-    state.config.plan_list.push(item);
+    state.chargePlan.config.plan_list.push(item);
     renderTable();
-    scheduleAutoSave();
+    scheduleAutoSave("charge_plan");
   });
 
   $<HTMLButtonElement>("#btn-delete-done").addEventListener(
@@ -899,7 +1436,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $<HTMLButtonElement>("#btn-delete-all").addEventListener("click", deleteAll);
   $<HTMLButtonElement>("#btn-migrate-copy").addEventListener(
     "click",
-    migrateCopy,
+    () => void migrateCopyActiveTab(),
   );
 
   // 自动填充（不自动应用）：提示用户手动确认

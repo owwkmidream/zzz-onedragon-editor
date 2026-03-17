@@ -10,15 +10,18 @@
 
   <body>
     <header class="app-header">
-      <div class="app-title">
-        <div class="app-title__row">
-          <div class="app-title__left">
-            <div class="app-title__name">体力计划编辑器</div>
-            <div class="app-title__desc">手动指向 ZenlessZoneZero-OneDragon 目录后即可使用</div>
+      <div class="app-tabs">
+        <div class="app-tabs__row">
+          <div class="tabs tabs--header" role="tablist" aria-label="配置类型">
+            <button id="tab-charge-plan" class="tab tab--active" role="tab" aria-selected="true">
+              体力计划
+            </button>
+            <button id="tab-hunt" class="tab" role="tab" aria-selected="false">
+              恶名狩猎
+            </button>
           </div>
-          <div class="app-title__right">
-            <button id="btn-settings" class="button button--icon" title="设置" aria-label="设置"></button>
-          </div>
+
+          <button id="btn-settings" class="button button--icon" title="设置" aria-label="设置"></button>
         </div>
       </div>
     </header>
@@ -65,63 +68,87 @@
 
       <section class="card">
         <div class="card__title">配置</div>
-        <div class="cfg">
-          <div class="cfg__row">
-            <label class="toggle toggle--compact" title="开启后全部计划循环到体力用尽">
-              <input id="cfg-loop" type="checkbox" />
-              <span class="toggle__ui" aria-hidden="true"></span>
-              <span class="toggle__text">
-                <span class="toggle__title">循环执行</span>
-              </span>
-            </label>
-
-            <label class="toggle toggle--compact" title="开启后自动跳过体力不足的计划">
-              <input id="cfg-skip" type="checkbox" />
-              <span class="toggle__ui" aria-hidden="true"></span>
-              <span class="toggle__text">
-                <span class="toggle__title">跳过计划</span>
-              </span>
-            </label>
-          </div>
-
-          <div class="cfg__row cfg__row--restore">
-            <div class="cfg-restore">
-              <div class="cfg-restore__title">恢复电量</div>
-            </div>
-            <select id="cfg-restore" class="select select--compact"></select>
-          </div>
-
-          <!-- 保留字段：不展示，但需要保留以便原值写回 -->
-          <input id="cfg-coupon" type="checkbox" hidden />
-        </div>
-
         <div class="actions actions--tight">
           <div id="save-status" class="save-status"></div>
           <div class="actions__spacer"></div>
-          <button id="btn-delete-done" class="button">删除已完成</button>
-          <button id="btn-delete-all" class="button button--danger">删除全部</button>
         </div>
 
-        <div id="plan-list" class="plan-list"></div>
-        <button id="btn-add" class="button button--primary button--full">新增</button>
+        <section id="panel-charge-plan" class="panel panel--active" role="tabpanel">
+          <div class="cfg">
+            <div class="cfg__row">
+              <label class="toggle toggle--compact" title="开启后全部计划循环到体力用尽">
+                <input id="cfg-loop" type="checkbox" />
+                <span class="toggle__ui" aria-hidden="true"></span>
+                <span class="toggle__text">
+                  <span class="toggle__title">循环执行</span>
+                  <span class="toggle__desc">开启后全部计划循环到体力用尽</span>
+                </span>
+              </label>
 
-        <details id="history-details" class="history" hidden>
-          <summary class="history__summary">
-            <span>history_list（只读）</span>
-            <span id="history-count" class="history__count"></span>
-          </summary>
-          <div id="history-list" class="plan-list plan-list--history"></div>
-        </details>
+              <label class="toggle toggle--compact" title="开启后自动跳过体力不足的计划">
+                <input id="cfg-skip" type="checkbox" />
+                <span class="toggle__ui" aria-hidden="true"></span>
+                <span class="toggle__text">
+                  <span class="toggle__title">跳过计划</span>
+                  <span class="toggle__desc">开启后自动跳过体力不足的计划</span>
+                </span>
+              </label>
+            </div>
 
-        <details class="notice">
-          <summary class="notice__title">提示</summary>
-          <ul class="notice__list">
-            <li>自动保存会写入主路径：config/{实例}/one_dragon/charge_plan.yml</li>
-            <li>每次写入前会生成备份：charge_plan.yyyymmdd-HHMMSS.bak</li>
-            <li>主程序可能缓存配置；保存后建议重启主程序以生效</li>
-            <li>level 字段可能被主程序保存时擦除（v0 不提供编辑入口）</li>
-          </ul>
-        </details>
+            <div class="cfg__row cfg__row--restore">
+              <div class="cfg-restore">
+                <div class="cfg-restore__title">恢复电量</div>
+              </div>
+              <select id="cfg-restore" class="select select--compact"></select>
+            </div>
+
+            <!-- 保留字段：不展示，但需要保留以便原值写回 -->
+            <input id="cfg-coupon" type="checkbox" hidden />
+          </div>
+
+          <div class="actions actions--tight actions--after-cfg">
+            <div class="actions__spacer"></div>
+            <div id="charge-plan-actions" class="actions__group">
+              <button id="btn-delete-done" class="button">删除已完成</button>
+              <button id="btn-delete-all" class="button button--danger">删除全部</button>
+            </div>
+          </div>
+
+          <div id="plan-list" class="plan-list"></div>
+          <button id="btn-add" class="button button--primary button--full">新增</button>
+
+          <details id="history-details" class="history" hidden>
+            <summary class="history__summary">
+              <span>history_list（只读）</span>
+              <span id="history-count" class="history__count"></span>
+            </summary>
+            <div id="history-list" class="plan-list plan-list--history"></div>
+          </details>
+
+          <details id="notice-charge-plan" class="notice">
+            <summary class="notice__title">提示</summary>
+            <ul class="notice__list">
+              <li>自动保存会写入主路径：config/{实例}/one_dragon/charge_plan.yml</li>
+              <li>每次写入前会生成备份：charge_plan.yyyymmdd-HHMMSS.bak</li>
+              <li>主程序可能缓存配置；保存后建议重启主程序以生效</li>
+              <li>level 字段可能被主程序保存时擦除（v0 不提供编辑入口）</li>
+            </ul>
+          </details>
+        </section>
+
+        <section id="panel-hunt" class="panel" role="tabpanel" hidden>
+          <div id="hunt-list" class="plan-list"></div>
+          <details id="notice-hunt" class="notice">
+            <summary class="notice__title">提示</summary>
+            <ul class="notice__list">
+              <li>自动保存会写入主路径：config/{实例}/one_dragon/notorious_hunt.yml</li>
+              <li>每次写入前会生成备份：notorious_hunt.yyyymmdd-HHMMSS.bak</li>
+              <li>列表长度固定为“当前全部 BOSS”（从 compendium 动态读取并自动补齐）</li>
+              <li>主程序可能缓存配置；保存后建议重启主程序以生效</li>
+              <li>不提供新增/删除入口，只允许更新字段与调整顺序</li>
+            </ul>
+          </details>
+        </section>
       </section>
 
       <section class="card" id="migration-card" hidden>

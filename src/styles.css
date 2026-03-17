@@ -20,6 +20,10 @@ body {
   padding: 0;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .app-header {
   position: sticky;
   top: 0;
@@ -64,6 +68,19 @@ body {
 .app-title__desc {
   font-size: 13px;
   color: #5a6270;
+}
+
+.app-tabs {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 12px 18px;
+}
+
+.app-tabs__row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
 }
 
 .app {
@@ -383,6 +400,52 @@ table button:active {
   border-radius: 10px;
 }
 
+.tabs {
+  display: flex;
+  gap: 12px;
+  padding: 8px;
+  border-radius: 16px;
+  border: 1px solid #e7eaf3;
+  background: #f8fafc;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.tabs.tabs--header {
+  margin-bottom: 0;
+}
+
+.tab {
+  padding: 12px 18px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 800;
+  color: #334155;
+  user-select: none;
+}
+
+.tab:hover {
+  background: #ffffff;
+  border-color: #e7eaf3;
+}
+
+.tab.tab--active {
+  background: #ffffff;
+  border-color: #9aa4be;
+  color: #0f172a;
+}
+
+.panel {
+  display: none;
+}
+
+.panel.panel--active {
+  display: block;
+}
+
 .actions {
   display: flex;
   gap: 8px;
@@ -395,8 +458,18 @@ table button:active {
   margin: 8px 0 10px;
 }
 
+.actions.actions--after-cfg {
+  margin: 10px 0 12px;
+}
+
 .actions__spacer {
   flex: 1;
+}
+
+.actions__group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .save-status {
@@ -669,6 +742,21 @@ table button:active {
 }
 
 .plan-field.plan-field--type {
+  flex-basis: 140px;
+  max-width: 160px;
+}
+
+.plan-field.plan-field--boss {
+  flex-basis: 200px;
+  max-width: 240px;
+}
+
+.plan-field.plan-field--level {
+  flex-basis: 120px;
+  max-width: 140px;
+}
+
+.plan-field.plan-field--buff {
   flex-basis: 140px;
   max-width: 160px;
 }

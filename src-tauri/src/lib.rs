@@ -16,6 +16,11 @@ pub fn run() {
             crate::commands::charge_plan::validate_charge_plan,
             crate::commands::charge_plan::save_charge_plan,
             crate::commands::charge_plan::migrate_legacy_to_main,
+            crate::commands::notorious_hunt::get_notorious_hunt_paths,
+            crate::commands::notorious_hunt::read_notorious_hunt,
+            crate::commands::notorious_hunt::validate_notorious_hunt,
+            crate::commands::notorious_hunt::save_notorious_hunt,
+            crate::commands::notorious_hunt::migrate_notorious_hunt_legacy_to_main,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
