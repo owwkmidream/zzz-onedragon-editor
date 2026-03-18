@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "zzz-od体力计划编辑",
+  "productName": "ZZZ OneDragon Config Editor",
   "version": "0.1.0",
   "identifier": "cc.one-dragon.charge-plan-editor",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "体力计划编辑器",
+        "title": "ZZZ OneDragon 配置编辑器",
         "width": 1080,
         "height": 760,
         "resizable": true
@@ -25,7 +25,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis",
+      "msi"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

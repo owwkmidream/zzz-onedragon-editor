@@ -143,13 +143,6 @@ const storage = {
   setLastInstance(value: number) {
     localStorage.setItem("instance_idx", String(value));
   },
-  getActiveTab(): TabKind {
-    const raw = localStorage.getItem("active_tab");
-    return raw === "notorious_hunt" ? "notorious_hunt" : "charge_plan";
-  },
-  setActiveTab(value: TabKind) {
-    localStorage.setItem("active_tab", value);
-  },
 };
 
 const state = {
@@ -159,7 +152,7 @@ const state = {
   teams: [] as TeamInfo[],
   autoBattles: [] as string[],
   currentInstanceIdx: 1,
-  activeTab: storage.getActiveTab(),
+  activeTab: "charge_plan" as TabKind,
   chargePlan: {
     loadedInstanceIdx: null as number | null,
     paths: null as ConfigPaths | null,
@@ -1073,7 +1066,6 @@ function renderTabs() {
 async function switchTab(kind: TabKind) {
   if (state.activeTab === kind) return;
   state.activeTab = kind;
-  storage.setActiveTab(kind);
   renderTabs();
 
   if (!state.projectRoot) return;
@@ -1459,3 +1451,4 @@ window.addEventListener("DOMContentLoaded", async () => {
     setText("root-status", String(e));
   }
 });
+

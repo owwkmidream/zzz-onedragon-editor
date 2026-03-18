@@ -1,7 +1,7 @@
 [package]
 name = "charge-plan-editor-tauri"
 version = "0.1.0"
-description = "Charge plan editor for ZenlessZoneZero-OneDragon"
+description = "Config editor for ZenlessZoneZero-OneDragon"
 authors = ["Anne"]
 edition = "2021"
 
@@ -29,4 +29,3 @@ time = { version = "0.3", features = ["formatting", "local-offset"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
