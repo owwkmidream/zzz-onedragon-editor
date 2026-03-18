@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Charge Plan Editor",
+  "productName": "zzz-od体力计划编辑",
   "version": "0.1.0",
   "identifier": "cc.one-dragon.charge-plan-editor",
   "build": {
