@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import Sortable from "sortablejs";
 import {
@@ -97,6 +98,31 @@ type ReadNotoriousHuntResult = {
   validation: ValidationResult;
 };
 
+type PendingChargePlanSave = {
+  kind: "charge_plan";
+  projectRoot: string;
+  instanceIdx: number;
+  config: ChargePlanConfigModel;
+};
+
+type PendingHuntSave = {
+  kind: "notorious_hunt";
+  projectRoot: string;
+  instanceIdx: number;
+  config: NotoriousHuntConfigModel;
+};
+
+type PendingSaveJob = PendingChargePlanSave | PendingHuntSave;
+
+type ChargePlanSelectionState = {
+  categoryInvalid: boolean;
+  missionTypeInvalid: boolean;
+  missionInvalid: boolean;
+  categoryOptions: LabeledValue[];
+  missionTypeOptions: LabeledValue[];
+  missionOptions: LabeledValue[];
+};
+
 const RESTORE_CHARGE_ALLOWED = [
   "不使用",
   "使用储蓄电量",
@@ -173,7 +199,8 @@ let planSortable: Sortable | null = null;
 let huntSortable: Sortable | null = null;
 let saveTimer: number | null = null;
 let saving = false;
-const pendingSaves = new Set<TabKind>();
+let savePromise: Promise<void> | null = null;
+const pendingSaves = new Map<string, PendingSaveJob>();
 
 function iconSvg(iconNode: IconNode, size: number) {
   const el = createElement(iconNode, {
@@ -225,6 +252,25 @@ function tabLabel(kind: TabKind) {
   return kind === "charge_plan" ? "体力计划" : "恶名狩猎";
 }
 
+function saveJobKey(job: Pick<PendingSaveJob, "kind" | "projectRoot" | "instanceIdx">) {
+  return `${job.kind}::${job.projectRoot}::${job.instanceIdx}`;
+}
+
+function cloneChargePlanConfig(config: ChargePlanConfigModel): ChargePlanConfigModel {
+  return structuredClone(config);
+}
+
+function cloneHuntConfig(config: NotoriousHuntConfigModel): NotoriousHuntConfigModel {
+  return structuredClone(config);
+}
+
+function isCurrentSaveContext(job: Pick<PendingSaveJob, "projectRoot" | "instanceIdx">) {
+  return (
+    state.projectRoot === job.projectRoot &&
+    state.currentInstanceIdx === job.instanceIdx
+  );
+}
+
 function resetLoadedConfigs() {
   state.chargePlan.loadedInstanceIdx = null;
   state.chargePlan.paths = null;
@@ -240,6 +286,7 @@ function resetLoadedConfigs() {
 }
 
 async function applyProjectRoot(root: string) {
+  await flushAutoSave();
   state.projectRoot = root.trim();
   ($<HTMLInputElement>("#project-root")).value = state.projectRoot;
   if (!state.projectRoot) {
@@ -393,56 +440,97 @@ function syncChargePlanFromHeader() {
 }
 
 function scheduleAutoSave(kind: TabKind = state.activeTab) {
-  pendingSaves.add(kind);
+  if (!state.projectRoot) return;
+
+  if (kind === "charge_plan") {
+    if (!state.chargePlan.config) return;
+    syncChargePlanFromHeader();
+    const job: PendingChargePlanSave = {
+      kind,
+      projectRoot: state.projectRoot,
+      instanceIdx: state.currentInstanceIdx,
+      config: cloneChargePlanConfig(state.chargePlan.config),
+    };
+    pendingSaves.set(saveJobKey(job), job);
+  } else {
+    if (!state.hunt.config) return;
+    const job: PendingHuntSave = {
+      kind,
+      projectRoot: state.projectRoot,
+      instanceIdx: state.currentInstanceIdx,
+      config: cloneHuntConfig(state.hunt.config),
+    };
+    pendingSaves.set(saveJobKey(job), job);
+  }
+
   if (saveTimer) window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => void autoSave(), 600);
   setSaveStatus(`自动保存：待保存（${fmtClock()}）`);
 }
 
 async function autoSave() {
-  if (pendingSaves.size === 0) return;
-  if (saving) return;
+  if (pendingSaves.size === 0 && !saving) return;
+  if (savePromise) {
+    await savePromise;
+    return;
+  }
 
-  saving = true;
-  setSaveStatus("自动保存：保存中…", "saving");
-
-  const toSave = Array.from(pendingSaves);
-  pendingSaves.clear();
-
-  const errors: Array<{ kind: TabKind; message: string }> = [];
-  for (const kind of toSave) {
+  savePromise = (async () => {
     try {
-      if (kind === "charge_plan") await saveChargePlan();
-      else await saveHunt();
-    } catch (e) {
-      errors.push({ kind, message: String(e) });
+      while (pendingSaves.size > 0) {
+        saving = true;
+        setSaveStatus("自动保存：保存中…", "saving");
+
+        const toSave = Array.from(pendingSaves.values());
+        pendingSaves.clear();
+
+        const errors: Array<{ kind: TabKind; message: string }> = [];
+        for (const job of toSave) {
+          try {
+            if (job.kind === "charge_plan") await saveChargePlan(job);
+            else await saveHunt(job);
+          } catch (e) {
+            errors.push({ kind: job.kind, message: String(e) });
+          }
+        }
+
+        if (errors.length) {
+          const first = errors[0];
+          setSaveStatus(
+            `自动保存失败（${tabLabel(first.kind)}）：${first.message}`,
+            "err",
+          );
+        } else if (pendingSaves.size === 0) {
+          setSaveStatus(`自动保存：已保存（${fmtClock()}）`, "ok");
+        }
+      }
+    } finally {
+      saving = false;
+      savePromise = null;
     }
-  }
+  })();
 
-  if (errors.length) {
-    const first = errors[0];
-    setSaveStatus(
-      `自动保存失败（${tabLabel(first.kind)}）：${first.message}`,
-      "err",
-    );
-  } else {
-    setSaveStatus(`自动保存：已保存（${fmtClock()}）`, "ok");
-  }
-
-  saving = false;
-  if (pendingSaves.size) scheduleAutoSave();
+  await savePromise;
 }
 
-async function saveChargePlan() {
-  if (!state.chargePlan.config) return;
-  syncChargePlanFromHeader();
+async function flushAutoSave() {
+  if (saveTimer) {
+    window.clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  if (pendingSaves.size === 0 && !savePromise) return;
+  await autoSave();
+}
+
+async function saveChargePlan(job: PendingChargePlanSave) {
   const res = await invoke<SaveResult>("save_charge_plan", {
-    instanceIdx: state.currentInstanceIdx,
-    config: state.chargePlan.config,
+    instanceIdx: job.instanceIdx,
+    config: job.config,
     options: { update_history_list: true },
   });
   void res;
 
+  if (!isCurrentSaveContext(job)) return;
   if (state.chargePlan.paths) state.chargePlan.paths.main_exists = true;
   state.chargePlan.source = "main";
 
@@ -452,14 +540,14 @@ async function saveChargePlan() {
   }
 }
 
-async function saveHunt() {
-  if (!state.hunt.config) return;
+async function saveHunt(job: PendingHuntSave) {
   const res = await invoke<SaveResult>("save_notorious_hunt", {
-    instanceIdx: state.currentInstanceIdx,
-    config: state.hunt.config,
+    instanceIdx: job.instanceIdx,
+    config: job.config,
   });
   void res;
 
+  if (!isCurrentSaveContext(job)) return;
   if (state.hunt.paths) state.hunt.paths.main_exists = true;
   state.hunt.source = "main";
 
@@ -485,28 +573,67 @@ function getMissions(category: string, missionType: string): LabeledValue[] {
   );
 }
 
-function ensureValidSelection(item: ChargePlanItem) {
-  if (!state.compendium) return;
+function invalidOption(value: string | null | undefined): LabeledValue | null {
+  const normalized = value ?? "";
+  if (!normalized) return null;
+  return {
+    value: normalized,
+    label: `已失效：${normalized}`,
+  };
+}
 
-  // category
-  if (!state.compendium.categories.includes(item.category_name)) {
-    item.category_name = state.compendium.categories[0] ?? item.category_name;
+function withInvalidOption(
+  options: LabeledValue[],
+  invalid: LabeledValue | null,
+): LabeledValue[] {
+  if (!invalid || options.some((opt) => opt.value === invalid.value)) {
+    return options;
   }
+  return [invalid, ...options];
+}
 
-  const types = getMissionTypes(item.category_name);
-  if (!types.find((t) => t.value === item.mission_type_name)) {
-    item.mission_type_name = types[0]?.value ?? item.mission_type_name;
-  }
+function getSelectionState(item: ChargePlanItem): ChargePlanSelectionState {
+  const categoryOptions = (state.compendium?.categories ?? []).map((value) => ({
+    label: value,
+    value,
+  }));
+  const categoryInvalid = !categoryOptions.some(
+    (opt) => opt.value === item.category_name,
+  );
+  const safeCategory = categoryInvalid
+    ? state.compendium?.categories[0] ?? ""
+    : item.category_name;
 
-  const missions = getMissions(item.category_name, item.mission_type_name);
-  if (!missions.length) {
-    item.mission_name = null;
-  } else {
-    if (item.mission_name && missions.some((m) => m.value === item.mission_name)) {
-      return;
-    }
-    item.mission_name = missions[0]?.value ?? null;
-  }
+  const missionTypeOptionsBase = getMissionTypes(safeCategory);
+  const missionTypeInvalid = !missionTypeOptionsBase.some(
+    (opt) => opt.value === item.mission_type_name,
+  );
+  const safeMissionType = missionTypeInvalid
+    ? missionTypeOptionsBase[0]?.value ?? ""
+    : item.mission_type_name;
+
+  const missionOptionsBase = getMissions(safeCategory, safeMissionType);
+  const missionInvalid = item.mission_name
+    ? !missionOptionsBase.some((opt) => opt.value === item.mission_name)
+    : false;
+
+  return {
+    categoryInvalid,
+    missionTypeInvalid,
+    missionInvalid,
+    categoryOptions: withInvalidOption(
+      categoryOptions,
+      categoryInvalid ? invalidOption(item.category_name) : null,
+    ),
+    missionTypeOptions: withInvalidOption(
+      missionTypeOptionsBase,
+      missionTypeInvalid ? invalidOption(item.mission_type_name) : null,
+    ),
+    missionOptions: withInvalidOption(
+      missionOptionsBase,
+      missionInvalid ? invalidOption(item.mission_name) : null,
+    ),
+  };
 }
 
 function createSelect(
@@ -669,12 +796,18 @@ function renderPlanList() {
 
   for (let index = 0; index < config.plan_list.length; index++) {
     const item = config.plan_list[index];
-    ensureValidSelection(item);
+    const selection = getSelectionState(item);
 
     const card = document.createElement("div");
     card.className = "plan-card";
     card.dataset.planId = item.plan_id;
     card.classList.toggle("plan-card--done", isCompleted(item));
+    card.classList.toggle(
+      "plan-card--invalid",
+      selection.categoryInvalid ||
+        selection.missionTypeInvalid ||
+        selection.missionInvalid,
+    );
 
     const icon = document.createElement("div");
     icon.className = "plan-card__icon";
@@ -692,9 +825,9 @@ function renderPlanList() {
 
     const hasAutoBattle = item.predefined_team_idx === -1;
 
-    const categoryOptions = (state.compendium?.categories ?? []).map((c) => ({
-      value: c,
-      label: c,
+    const categoryOptions = selection.categoryOptions.map((c) => ({
+      value: c.value,
+      label: c.label,
     }));
     const categorySel = createSelect(categoryOptions, item.category_name, (v) => {
       item.category_name = v;
@@ -707,7 +840,7 @@ function renderPlanList() {
     });
     rowTop.appendChild(fieldTooltip("分类", categorySel, "plan-field--cat"));
 
-    const typeOptions = getMissionTypes(item.category_name).map((t) => ({
+    const typeOptions = selection.missionTypeOptions.map((t) => ({
       value: t.value,
       label: t.label,
     }));
@@ -720,7 +853,7 @@ function renderPlanList() {
     });
     rowTop.appendChild(fieldTooltip("类型", typeSel, "plan-field--type"));
 
-    const missions = getMissions(item.category_name, item.mission_type_name);
+    const missions = selection.missionOptions;
     const missionOptions = [
       { value: "", label: "（无/不需要）" },
       ...missions.map((m) => ({ value: m.value, label: m.label })),
@@ -742,6 +875,26 @@ function renderPlanList() {
         hasAutoBattle ? "plan-field--mission" : "plan-field--mission-wide",
       ),
     );
+
+    if (
+      selection.categoryInvalid ||
+      selection.missionTypeInvalid ||
+      selection.missionInvalid
+    ) {
+      const invalidText: string[] = [];
+      if (selection.categoryInvalid) invalidText.push(`分类已失效：${item.category_name}`);
+      if (selection.missionTypeInvalid) {
+        invalidText.push(`类型已失效：${item.mission_type_name}`);
+      }
+      if (selection.missionInvalid && item.mission_name) {
+        invalidText.push(`关卡已失效：${item.mission_name}`);
+      }
+
+      const invalidHint = document.createElement("div");
+      invalidHint.className = "plan-card__warning";
+      invalidHint.textContent = invalidText.join(" | ");
+      content.appendChild(invalidHint);
+    }
 
     const cardDisabled = item.category_name !== "实战模拟室";
     const cardOptions = CARD_NUM_ALLOWED.map((v) => ({ value: v, label: v }));
@@ -1312,6 +1465,7 @@ function renderHuntList() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  const appWindow = getCurrentWindow();
   const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement | null;
 
   const settingsBtn = $<HTMLButtonElement>("#btn-settings");
@@ -1379,6 +1533,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     "change",
     async (e) => {
       const v = Number((e.target as HTMLSelectElement).value);
+      await flushAutoSave();
       state.currentInstanceIdx = v;
       storage.setLastInstance(v);
       try {
@@ -1393,6 +1548,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   );
 
   $<HTMLButtonElement>("#btn-reload").addEventListener("click", async () => {
+    await flushAutoSave();
     resetLoadedConfigs();
     await loadOptions();
     await loadActiveTab(true);
@@ -1430,6 +1586,18 @@ window.addEventListener("DOMContentLoaded", async () => {
     "click",
     () => void migrateCopyActiveTab(),
   );
+
+  await appWindow.onCloseRequested(async (event) => {
+    if (pendingSaves.size === 0 && !savePromise) return;
+    event.preventDefault();
+    try {
+      setSaveStatus("自动保存：关闭前保存中…", "saving");
+      await flushAutoSave();
+      await appWindow.destroy();
+    } catch (e) {
+      setSaveStatus(`关闭前保存失败：${String(e)}`, "err");
+    }
+  });
 
   // 自动填充（不自动应用）：提示用户手动确认
   try {

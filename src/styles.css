@@ -672,6 +672,11 @@ table button:active {
   background: #f1f5f9;
 }
 
+.plan-card.plan-card--invalid {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
 .plan-card__icon {
   width: 44px;
   height: 44px;
@@ -693,6 +698,16 @@ table button:active {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+}
+
+.plan-card__warning {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 8px;
+  padding: 6px 8px;
 }
 
 .plan-row {
