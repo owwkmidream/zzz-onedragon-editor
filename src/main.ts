@@ -121,6 +121,14 @@ type ChargePlanSelectionState = {
   categoryOptions: LabeledValue[];
   missionTypeOptions: LabeledValue[];
   missionOptions: LabeledValue[];
+  normalizedCategory: string;
+  normalizedMissionType: string;
+  normalizedMission: string | null;
+};
+
+type ChargePlanNormalizationResult = {
+  changed: boolean;
+  fixedItems: number;
 };
 
 const RESTORE_CHARGE_ALLOWED = [
@@ -445,6 +453,10 @@ function scheduleAutoSave(kind: TabKind = state.activeTab) {
   if (kind === "charge_plan") {
     if (!state.chargePlan.config) return;
     syncChargePlanFromHeader();
+    const normalization = normalizeChargePlanForAutoSave(state.chargePlan.config);
+    if (normalization.changed && state.activeTab === "charge_plan") {
+      renderPlanList();
+    }
     const job: PendingChargePlanSave = {
       kind,
       projectRoot: state.projectRoot,
@@ -452,6 +464,14 @@ function scheduleAutoSave(kind: TabKind = state.activeTab) {
       config: cloneChargePlanConfig(state.chargePlan.config),
     };
     pendingSaves.set(saveJobKey(job), job);
+    if (saveTimer) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => void autoSave(), 600);
+    setSaveStatus(
+      normalization.changed
+        ? `自动保存：已自动修正 ${normalization.fixedItems} 条失效计划，待保存（${fmtClock()}）`
+        : `自动保存：待保存（${fmtClock()}）`,
+    );
+    return;
   } else {
     if (!state.hunt.config) return;
     const job: PendingHuntSave = {
@@ -600,22 +620,27 @@ function getSelectionState(item: ChargePlanItem): ChargePlanSelectionState {
   const categoryInvalid = !categoryOptions.some(
     (opt) => opt.value === item.category_name,
   );
-  const safeCategory = categoryInvalid
-    ? state.compendium?.categories[0] ?? ""
+  const normalizedCategory = categoryInvalid
+    ? state.compendium?.categories[0] ?? item.category_name
     : item.category_name;
 
-  const missionTypeOptionsBase = getMissionTypes(safeCategory);
+  const missionTypeOptionsBase = getMissionTypes(normalizedCategory);
   const missionTypeInvalid = !missionTypeOptionsBase.some(
     (opt) => opt.value === item.mission_type_name,
   );
-  const safeMissionType = missionTypeInvalid
-    ? missionTypeOptionsBase[0]?.value ?? ""
+  const normalizedMissionType = missionTypeInvalid
+    ? missionTypeOptionsBase[0]?.value ?? item.mission_type_name
     : item.mission_type_name;
 
-  const missionOptionsBase = getMissions(safeCategory, safeMissionType);
+  const missionOptionsBase = getMissions(normalizedCategory, normalizedMissionType);
   const missionInvalid = item.mission_name
     ? !missionOptionsBase.some((opt) => opt.value === item.mission_name)
-    : false;
+    : missionOptionsBase.length > 0;
+  const normalizedMission = !missionOptionsBase.length
+    ? null
+    : !item.mission_name || missionInvalid
+      ? missionOptionsBase[0]?.value ?? null
+      : item.mission_name;
 
   return {
     categoryInvalid,
@@ -631,8 +656,37 @@ function getSelectionState(item: ChargePlanItem): ChargePlanSelectionState {
     ),
     missionOptions: withInvalidOption(
       missionOptionsBase,
-      missionInvalid ? invalidOption(item.mission_name) : null,
+      item.mission_name && missionInvalid ? invalidOption(item.mission_name) : null,
     ),
+    normalizedCategory,
+    normalizedMissionType,
+    normalizedMission,
+  };
+}
+
+function normalizeChargePlanForAutoSave(
+  config: ChargePlanConfigModel,
+): ChargePlanNormalizationResult {
+  let fixedItems = 0;
+
+  for (const item of config.plan_list) {
+    const selection = getSelectionState(item);
+    const changed =
+      item.category_name !== selection.normalizedCategory ||
+      item.mission_type_name !== selection.normalizedMissionType ||
+      item.mission_name !== selection.normalizedMission;
+
+    if (!changed) continue;
+
+    item.category_name = selection.normalizedCategory;
+    item.mission_type_name = selection.normalizedMissionType;
+    item.mission_name = selection.normalizedMission;
+    fixedItems += 1;
+  }
+
+  return {
+    changed: fixedItems > 0,
+    fixedItems,
   };
 }
 
